@@ -54,8 +54,11 @@ function linksHtml(links) {
           .join('')}</ul></section>`;
 }
 
-function entriesHtml(entries, { isOwner = false } = {}) {
-  if (!entries.length) return '<li class="empty">No signatures yet. Be the first ghost to sign!</li>';
+function entriesHtml(entries, { isOwner = false, canSign = true } = {}) {
+  if (!entries.length) {
+    const text = canSign ? 'No signatures yet. Be the first ghost to sign!' : 'No signatures were left on this page.';
+    return `<li class="empty">${text}</li>`;
+  }
   return entries
     .map(
       (en) => `<li data-id="${en.id}">
@@ -151,7 +154,7 @@ ${heroHtml(page)}
   ${linksHtml(page.links)}
   <section class="card wide">
     <h2>Guestbook</h2>
-    <ul class="gb-list">${entriesHtml(entries)}</ul>
+    <ul class="gb-list">${entriesHtml(entries, { canSign: false })}</ul>
   </section>
 </main>
 <footer class="foot">

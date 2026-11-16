@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { createApp } from '../server/index.js';
+import { renderExport, renderProfile } from '../server/render.js';
 
 let app;
 let base;
@@ -288,4 +289,14 @@ test('export is rate limited per user', async () => {
   const statuses = [];
   for (let i = 0; i < 4; i++) statuses.push((await getExport(exporterCookie)).res.status);
   assert.deepEqual(statuses, [200, 200, 200, 429]);
+});
+
+test('empty guestbook text differs between the live page and the export (which has no form)', () => {
+  const owner = { username: 'ghosty' };
+  const page = validPage({ title: 'Empty Book' });
+  const exported = renderExport({ owner, page, entries: [], css: '', exportedAt: Date.now() });
+  assert.ok(exported.includes('No signatures were left on this page.'));
+  assert.ok(!exported.includes('Be the first ghost to sign!'));
+  const live = renderProfile({ owner, page, entries: [], isOwner: false });
+  assert.ok(live.includes('No signatures yet. Be the first ghost to sign!'));
 });
