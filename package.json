@@ -1,0 +1,14 @@
+{
+  "name": "geoghosts",
+  "version": "1.0.0",
+  "description": "GeoGhosts: a haunted revival of GeoCities-style personal homepages with guestbooks, visitor counters and webrings.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"tests/**/*.test.js\""
+  }
+}
