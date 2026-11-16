@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Run tests on server/tests changes",
+      "trigger": "PostFileSave",
+      "description": "Runs npm test after any file under server/ or tests/ is saved",
+      "matcher": "(^|/)(server|tests)/",
+      "action": {
+        "type": "command",
+        "command": "npm test",
+        "timeout": 120
+      }
+    }
+  ]
+}
