@@ -37,6 +37,28 @@ function toast(message, kind = 'good') {
   toastTimer = setTimeout(() => (toastEl.className = ''), 3200);
 }
 
+async function downloadExport(button) {
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/me/export', { credentials: 'same-origin' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Could not export your page');
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const link = h('a', { href: url, download: `geoghosts-${state.user.username}.zip` });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    toast('Your ghost is packed. Check your downloads.');
+  } catch (err) {
+    toast(err.message, 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function debounce(fn, ms) {
   let t;
   return (...args) => {
@@ -233,6 +255,7 @@ function dashboardView() {
   const frame = h('iframe', { class: 'preview-frame', title: 'Live preview of your page', src: `/u/${username}`, loading: 'lazy' });
   const refresh = () => frame.setAttribute('src', `/u/${username}?t=${Date.now()}`);
 
+  const exportBtn = h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => downloadExport(exportBtn) }, 'Export my page');
   const saveBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Save changes');
   const form = h('form', { class: 'stack', onsubmit: async (event) => {
     event.preventDefault();
@@ -262,7 +285,7 @@ function dashboardView() {
     ),
     h('fieldset', {}, h('legend', {}, 'Theme'), h('div', { class: 'themes' }, themeInputs)),
     h('fieldset', {}, h('legend', {}, 'Cursed links'), linksBox, addLinkBtn),
-    h('div', { class: 'actions' }, saveBtn, h('a', { class: 'btn btn-ghost', href: `/u/${username}`, target: '_blank', rel: 'noopener' }, 'Open my page ↗')),
+    h('div', { class: 'actions' }, saveBtn, h('a', { class: 'btn btn-ghost', href: `/u/${username}`, target: '_blank', rel: 'noopener' }, 'Open my page ↗'), exportBtn),
   );
 
   mount(h('div', { class: 'dash' },

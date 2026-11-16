@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { createApp } from '../server/index.js';
 
 let app;
@@ -102,7 +103,7 @@ test('editing a page requires auth, validates and persists', async () => {
 test('profile pages escape user content (XSS)', async () => {
   const reg = await call('/api/register', { method: 'POST', body: { username: 'xss_victim', password: 'longenough1' } });
   const payload = '<script>alert(1)</script><img src=x onerror=alert(2)>';
-  await call('/api/me/page', { method: 'PUT', cookie: reg.cookie, body: validPage({ bio: payload, title: payload.slice(0, 40) }) });
+  await call('/api/me/page', { method: 'PUT', cookie: exporterCookie, body: validPage({ bio: payload, title: payload.slice(0, 40) }) });
   await call('/api/pages/xss_victim/guestbook', { method: 'POST', body: { author: '<b>mallory</b>', message: payload.slice(0, 120) } });
   const page = await call('/u/xss_victim');
   assert.equal(page.status, 200);
@@ -185,4 +186,106 @@ test('static files and 404s; path traversal is blocked', async () => {
   const trav = await call('/..%2f..%2fpackage.json');
   assert.equal(trav.status, 404);
   assert.equal((await call('/u/nobody_such_user')).status, 404);
+});
+
+/** Minimal ZIP reader: walks the central directory, inflates each entry and checks its CRC-32. */
+function readZip(buf) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(eocd >= 0, 'end of central directory record present');
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const files = {};
+  for (let i = 0; i < count; i++) {
+    assert.equal(buf.readUInt32LE(p), 0x02014b50, 'central directory signature');
+    const method = buf.readUInt16LE(p + 10);
+    const crc = buf.readUInt32LE(p + 16);
+    const packedSize = buf.readUInt32LE(p + 20);
+    const size = buf.readUInt32LE(p + 24);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    assert.equal(buf.readUInt32LE(local), 0x04034b50, 'local header signature');
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    assert.equal(method, 8);
+    const data = inflateRawSync(buf.subarray(start, start + packedSize));
+    assert.equal(data.length, size);
+    assert.equal(crc32(data), crc);
+    files[name] = data.toString('utf8');
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return files;
+}
+
+// Insert directly: the per-IP guestbook rate limit is already used up by earlier tests.
+function signGuestbook(username, author, message) {
+  const { id } = app.db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  app.db.prepare('INSERT INTO guestbook (page_user_id, author, message, created_at) VALUES (?, ?, ?, ?)').run(id, author, message, Date.now());
+}
+
+async function getExport(cookie) {
+  const res = await fetch(`${base}/api/me/export`, { headers: cookie ? { cookie } : {} });
+  return { res, body: Buffer.from(await res.arrayBuffer()) };
+}
+
+test('export requires login', async () => {
+  const { res, body } = await getExport();
+  assert.equal(res.status, 401);
+  assert.equal(JSON.parse(body.toString()).error, 'Please log in first');
+});
+
+let exporterCookie;
+
+test('export is a valid ZIP with index.html and data.json, and leaks no secrets', async () => {
+  const reg = await call('/api/register', { method: 'POST', body: { username: 'exporter', password: 'longenough1' } });
+  exporterCookie = reg.cookie;
+  await call('/api/me/page', { method: 'PUT', cookie: reg.cookie, body: validPage({ title: 'Export Me' }) });
+  signGuestbook('exporter', 'Visitor', 'Hello from the void');
+
+  const { res, body } = await getExport(reg.cookie);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  assert.equal(res.headers.get('content-disposition'), 'attachment; filename="geoghosts-exporter.zip"');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+
+  const files = readZip(body);
+  assert.deepEqual(Object.keys(files).sort(), ['data.json', 'index.html']);
+
+  const data = JSON.parse(files['data.json']);
+  assert.equal(data.username, 'exporter');
+  assert.equal(data.page.title, 'Export Me');
+  assert.deepEqual(data.page.links, [{ label: 'Example', url: 'https://example.com/a' }]);
+  assert.equal(data.guestbook.length, 1);
+  assert.equal(data.guestbook[0].author, 'Visitor');
+
+  const everything = files['data.json'] + files['index.html'];
+  assert.ok(!/pass_hash|scrypt|password|session|gg_session/i.test(everything));
+  assert.ok(!/casper/i.test(everything), 'other users (registered in earlier tests) are not included');
+
+  const html = files['index.html'];
+  assert.ok(html.includes('Export Me'));
+  assert.ok(html.includes('Hello from the void'));
+  assert.ok(html.includes('--accent'), 'theme CSS is inlined');
+  assert.ok(!/<script|<link |<form|src="\/|href="\/|\/ring\//i.test(html), 'self-contained, no JavaScript');
+});
+
+test('export escapes user content like the live page', async () => {
+  const payload = '<script>alert(1)</script><img src=x onerror=alert(2)>';
+  await call('/api/me/page', { method: 'PUT', cookie: exporterCookie, body: validPage({ bio: payload, title: payload.slice(0, 40) }) });
+  signGuestbook('exporter', '<b>mallory</b>', payload.slice(0, 120));
+
+  const { body } = await getExport(exporterCookie);
+  const html = readZip(body)['index.html'];
+  assert.ok(!html.includes('<script>alert(1)</script>'));
+  assert.ok(!html.includes('<img src=x'));
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(html.includes('&lt;b&gt;mallory&lt;/b&gt;'));
+});
+
+test('export is rate limited per user', async () => {
+  // Two exports already happened for this user in the tests above; the limit is 5 per window.
+  const statuses = [];
+  for (let i = 0; i < 4; i++) statuses.push((await getExport(exporterCookie)).res.status);
+  assert.deepEqual(statuses, [200, 200, 200, 429]);
 });

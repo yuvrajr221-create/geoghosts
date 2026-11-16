@@ -10,6 +10,7 @@ Built for the **Kiroween 2026** hackathon, category **Resurrection**.
 - 🕸️ Webring navigation (previous / next / random) and a searchable directory of pages
 - 🎨 Four themes: Haunted Mansion, Neon Void, Vapor Cemetery, Pumpkin Patch
 - ✍️ Dashboard with live preview, link manager and the 🔮 Séance copywriter (uses Claude when `ANTHROPIC_API_KEY` is set, otherwise a built-in template generator)
+- 📦 Export: download a self-contained ZIP of your page (`index.html` with inlined theme, no JavaScript) and `data.json` (page fields, links, guestbook) from the dashboard
 - 🔒 Security-first: scrypt password hashing, signed HttpOnly sessions, strict CSP, output escaping, input validation, rate limits
 
 ## Tech stack
@@ -43,6 +44,7 @@ Put it behind HTTPS (for example a load balancer or Caddy) and set `COOKIE_SECUR
 |---|---|---|
 | POST | `/api/register`, `/api/login`, `/api/logout` | session cookie |
 | GET / PUT | `/api/me`, `/api/me/page` | current user, edit page |
+| GET | `/api/me/export` | ZIP of your page and guestbook (auth, 5 per 10 min) |
 | POST | `/api/generate` | Séance copy (auth, rate-limited) |
 | GET | `/api/pages`, `/api/pages/:username` | directory, page + guestbook |
 | POST | `/api/pages/:username/guestbook` | sign guestbook |

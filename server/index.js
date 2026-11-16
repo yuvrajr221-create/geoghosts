@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -11,9 +12,11 @@ import { DEFAULT_THEME, THEMES, THEME_IDS } from './themes.js';
 import { assertUsernameAllowed, validateCredentials, validateGuestbook, validatePage } from './validate.js';
 import { renderNotFound, renderProfile } from './render.js';
 import { generateCopy } from './ai.js';
+import { buildExport } from './export.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PUBLIC_DIR = join(ROOT, 'public');
+const PROFILE_CSS = readFileSync(join(PUBLIC_DIR, 'profile.css'), 'utf8');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -64,6 +67,9 @@ export function createApp(options = {}) {
     entries: db.prepare(
       'SELECT id, author, message, created_at FROM guestbook WHERE page_user_id = ? ORDER BY id DESC LIMIT 50',
     ),
+    allEntries: db.prepare(
+      'SELECT id, author, message, created_at FROM guestbook WHERE page_user_id = ? ORDER BY id DESC LIMIT 1000',
+    ),
     insertEntry: db.prepare('INSERT INTO guestbook (page_user_id, author, message, created_at) VALUES (?, ?, ?, ?)'),
     entryById: db.prepare('SELECT id, page_user_id FROM guestbook WHERE id = ?'),
     deleteEntry: db.prepare('DELETE FROM guestbook WHERE id = ?'),
@@ -77,6 +83,7 @@ export function createApp(options = {}) {
   const authLimit = rateLimiter({ windowMs: 15 * 60_000, max: 20 });
   const guestbookLimit = rateLimiter({ windowMs: 10 * 60_000, max: 6 });
   const generateLimit = rateLimiter({ windowMs: 60_000, max: 5 });
+  const exportLimit = rateLimiter({ windowMs: 10 * 60_000, max: 5 });
 
   const toPage = (owner, row) => ({
     username: owner.username,
@@ -184,6 +191,24 @@ export function createApp(options = {}) {
     const p = validatePage(await readJson(req));
     sql.updatePage.run(p.title, p.tagline, p.bio, p.theme, p.marquee, JSON.stringify(p.links), Date.now(), user.id);
     sendJson(res, 200, { page: toPage(user, sql.page.get(user.id)) });
+  });
+
+  route('GET', /^\/api\/me\/export$/, ({ res, user }) => {
+    if (!user) throw new HttpError(401, 'Please log in first');
+    if (!exportLimit(`export:${user.id}`)) throw new HttpError(429, 'Too many exports. Try again in a few minutes.');
+    const row = sql.page.get(user.id);
+    const zip = buildExport({
+      owner: user,
+      page: { ...row, links: JSON.parse(row.links) },
+      entries: sql.allEntries.all(user.id),
+      css: PROFILE_CSS,
+    });
+    send(res, 200, zip, {
+      'content-type': 'application/zip',
+      'content-disposition': `attachment; filename="geoghosts-${user.username}.zip"`,
+      'content-length': zip.length,
+      'cache-control': 'no-store',
+    });
   });
 
   route('POST', /^\/api\/generate$/, async ({ req, res, user, ip }) => {
